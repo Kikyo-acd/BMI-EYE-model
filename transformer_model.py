@@ -4,17 +4,18 @@ import torch.nn.functional as F
 
 class SurvivalTransformer(nn.Module):
     """
-    基于Transformer的生存模型。
-    使用Transformer编码器来学习特征间的复杂关系。
-    其损失函数和预测逻辑与DeepHit类似，也是一个离散时间模型。
+    A Transformer-based survival model.
+    It uses a Transformer encoder to learn complex relationships among features.
+    Its loss function and prediction logic are similar to DeepHit, making it a
+    discrete-time model.
 
-    参数:
-        input_dim (int): 输入特征的数量。
-        d_model (int): Transformer模型的内部维度。
-        nhead (int): Transformer多头注意力机制的头数。
-        num_layers (int): Transformer编码器的层数。
-        dim_feedforward (int): Transformer前馈网络的维度。
-        ... (其他参数与DeepHit类似)
+    Args:
+        input_dim (int): The number of input features.
+        d_model (int): The internal dimensionality of the Transformer model.
+        nhead (int): The number of heads in the multi-head attention mechanism.
+        num_layers (int): The number of layers in the Transformer encoder.
+        dim_feedforward (int): The dimension of the feed-forward network.
+        ... (Other parameters are similar to DeepHit)
     """
     def __init__(self, input_dim, d_model=64, nhead=4, num_layers=3, dim_feedforward=128,
                  dropout=0.2, k_bins=10, weight_decay=1e-4, alpha=0.5, sigma=0.1):
@@ -34,7 +35,7 @@ class SurvivalTransformer(nn.Module):
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
         self.head = nn.Sequential(
-            nn.LayerNorm(d_model),
+            nn.LayerNorm(d_model), # Layer normalization before the output head
             nn.Linear(d_model, d_model // 2),
             nn.GELU(),
             nn.Dropout(dropout),
@@ -42,25 +43,25 @@ class SurvivalTransformer(nn.Module):
         )
 
     def forward(self, x):
-        """前向传播。将静态数据视为长度为1的序列进行处理。"""
+        """Forward pass. Treats static data as a sequence of length 1."""
         # [batch, input_dim] -> [batch, d_model]
         x_embedded = self.embedding(x)
         # [batch, d_model] -> [batch, 1, d_model]
         x_seq = x_embedded.unsqueeze(1)
         
-        # Transformer处理
+        # Transformer processing
         transformer_out = self.transformer_encoder(x_seq)
         
         # [batch, 1, d_model] -> [batch, d_model]
         out = transformer_out.squeeze(1)
         
-        # 输出头
+        # Output head
         logits = self.head(out)
         
         return F.softmax(logits, dim=1)
 
     def loss(self, probs, times, events, time_bins):
-        """损失函数与DeepHit完全相同。"""
+        """The loss function is identical to DeepHit's."""
         device = probs.device
         batch_size = probs.shape[0]
         time_idx = torch.bucketize(times, time_bins[1:-1])
