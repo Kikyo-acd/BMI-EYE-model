@@ -1,3 +1,6 @@
+# deepsurv_model.py
+# Contains the definition for the DeepSurv model, its loss function, and prediction methods.
+
 import torch
 import torch.nn as nn
 import numpy as np
@@ -6,14 +9,15 @@ from scipy.interpolate import interp1d
 
 class DeepSurv(nn.Module):
     """
-    DeepSurv模型。
-    这是一个基于深度学习的Cox比例风险模型。它使用神经网络来预测个体的对数风险比。
+    DeepSurv Model.
+    This is a deep learning-based Cox Proportional Hazards model. It uses a neural
+    network to predict the log-risk ratio for an individual.
     
-    参数:
-        input_dim (int): 输入特征的数量。
-        hidden_dims (list): 一个包含每个隐藏层节点数的列表。
-        dropout (float): Dropout比率。
-        weight_decay (float): L2正则化（权重衰减）的系数。
+    Args:
+        input_dim (int): The number of input features.
+        hidden_dims (list): A list containing the number of nodes in each hidden layer.
+        dropout (float): The dropout rate.
+        weight_decay (float): The coefficient for L2 regularization (weight decay).
     """
     def __init__(self, input_dim, hidden_dims=[64, 32], dropout=0.2, weight_decay=1e-4):
         super(DeepSurv, self).__init__()
@@ -25,48 +29,48 @@ class DeepSurv(nn.Module):
             layers.append(nn.ReLU())
             layers.append(nn.Dropout(dropout))
             prev_dim = hidden_dim
-        layers.append(nn.Linear(prev_dim, 1)) # 输出层，一个节点代表对数风险比
+        layers.append(nn.Linear(prev_dim, 1)) # Output layer: a single node for the log-risk score
         
         self.model = nn.Sequential(*layers)
         self.weight_decay = weight_decay
         
-        # 用于存储估计出的基线风险
+        # Attributes for storing the estimated baseline hazard
         self.baseline_hazard_ = None
         self.cumulative_baseline_hazard_ = None
         self.time_points_ = None
 
     def forward(self, x):
-        """前向传播，返回对数风险分数值。"""
+        """Forward pass, returns the log-risk scores."""
         return self.model(x)
 
     def loss(self, risk_scores, times, events):
         """
-        计算负对数Cox部分似然损失。
-        这是DeepSurv的核心损失函数。
+        Calculates the negative log Cox partial likelihood loss.
+        This is the core loss function for DeepSurv.
         """
         risk_scores = risk_scores.squeeze()
         
-        # 按事件时间降序排序，这是计算风险集的前提
+        # Sort by event time in descending order, a prerequisite for calculating the risk set
         sorted_indices = torch.argsort(times, descending=True)
         risk_scores_sorted = risk_scores[sorted_indices]
         events_sorted = events[sorted_indices]
         
-        # 计算风险比 e^h(x)
+        # Calculate the hazard ratio, e^h(x)
         hazard_ratio = torch.exp(risk_scores_sorted)
         
-        # 计算在每个时间点的风险集（所有“处于危险中”的个体）的对数风险和
+        # Calculate the log-risk-sum for the risk set at each time point
         log_risk = torch.log(torch.cumsum(hazard_ratio, dim=0))
         
-        # 计算每个发生事件个体的部分似然
-        # 只对事件真实发生的样本（events_sorted == 1）计算损失
+        # Calculate the partial likelihood for each individual who experienced an event
+        # The loss is only calculated for uncensored samples (events_sorted == 1)
         uncensored_likelihood = risk_scores_sorted - log_risk
         censored_likelihood = uncensored_likelihood * events_sorted
         
         num_events = torch.sum(events_sorted)
-        # 对损失进行平均，并取负
+        # Average the loss and take its negative
         neg_likelihood = -torch.sum(censored_likelihood) / (num_events + 1e-8)
         
-        # 添加L2正则化项
+        # Add L2 regularization term
         l2_reg = 0
         for param in self.parameters():
             l2_reg += torch.sum(param ** 2)
@@ -75,10 +79,11 @@ class DeepSurv(nn.Module):
 
     def fit_baseline_hazard(self, X_train, T_train, E_train):
         """
-        在模型训练后，使用Breslow估计器来估计基线风险函数。
-        这是预测绝对生存概率所必需的。
+        After model training, this method uses the Breslow estimator to estimate
+        the baseline hazard function, which is necessary for predicting absolute
+        survival probabilities.
         """
-        print("正在为DeepSurv估计基线风险...")
+        print("Estimating baseline hazard for DeepSurv...")
         device = next(self.parameters()).device
         X_tensor = torch.FloatTensor(X_train).to(device)
 
@@ -107,16 +112,16 @@ class DeepSurv(nn.Module):
         self.baseline_hazard_ = baseline_hazard
         self.cumulative_baseline_hazard_ = cumulative_baseline_hazard
         self.time_points_ = cumulative_baseline_hazard.index.values
-        print(f"基线风险估计完成，覆盖 {len(self.time_points_)} 个独特事件时间点。")
+        print(f"Baseline hazard estimation complete, covering {len(self.time_points_)} unique event time points.")
         return self
 
     def predict_survival(self, x, times):
         """
-        预测在指定时间点的生存概率 S(t|x)。
-        公式: S(t|x) = exp(-H0(t) * exp(h(x)))
+        Predicts the survival probability S(t|x) at specified time points.
+        Formula: S(t|x) = exp(-H0(t) * exp(h(x)))
         """
         if self.cumulative_baseline_hazard_ is None:
-            raise RuntimeError("必须先调用 `fit_baseline_hazard` 来估计基线风险。")
+            raise RuntimeError("The `fit_baseline_hazard` method must be called first to estimate the baseline hazard.")
             
         device = next(self.parameters()).device
         if isinstance(x, np.ndarray):
@@ -128,16 +133,16 @@ class DeepSurv(nn.Module):
             self.eval()
             risk_scores = self(x_tensor).squeeze().cpu().numpy()
             
-        # 使用线性插值（阶梯函数形式）来获取在指定时间点的累积基线风险
+        # Use interpolation (in a step-function manner) to get the cumulative baseline hazard at specified times
         f = interp1d(
             self.time_points_,
             self.cumulative_baseline_hazard_.values.squeeze(),
-            kind='previous', # 'previous' 实现了阶梯函数的行为
+            kind='previous', # 'previous' implements the behavior of a step function
             bounds_error=False,
             fill_value=(0, self.cumulative_baseline_hazard_.values[-1])
         )
-        H0_t = f(times) # 累积基线风险 H0(t)
+        H0_t = f(times) # Cumulative baseline hazard H0(t)
         
-        # 计算生存概率
+        # Calculate survival probabilities
         survival_probs = np.exp(-np.outer(np.exp(risk_scores), H0_t))
-        return survival_probs.T # 返回形状 [n_samples, n_times]
+        return survival_probs.T # Return shape [n_samples, n_times]
